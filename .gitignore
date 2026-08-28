@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Runtime data
+backend/*.db
+backend/static/uploads/*
+!backend/static/uploads/.gitkeep
+
+# Node dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+build/
+
+# Environment and local tooling
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
+*.log

@@ -1,0 +1,122 @@
+.security-splash {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 999999;
+  overflow: hidden;
+  background: #01040a;
+  opacity: 1;
+  isolation: isolate;
+  animation: splash-fade-in 700ms ease-out both;
+  transition: opacity 700ms ease-in;
+}
+
+.security-splash--fading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.security-splash__image,
+.security-splash__shade,
+.security-splash__grid,
+.security-splash__scan,
+.security-splash__particles,
+.security-splash__glow {
+  position: absolute;
+  inset: 0;
+}
+
+.security-splash__image {
+  background-image: url('/assets/security-splash.png');
+  background-size: cover;
+  background-position: center;
+  transform: scale(1.03);
+  animation: splash-image-settle 4000ms cubic-bezier(.2, .7, .2, 1) both;
+}
+
+.security-splash__shade {
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(1, 7, 18, .38), rgba(1, 5, 14, .2) 48%, rgba(1, 3, 10, .58));
+}
+
+.security-splash__grid {
+  z-index: 2;
+  opacity: .18;
+  background-image: linear-gradient(rgba(39, 169, 255, .16) 1px, transparent 1px), linear-gradient(90deg, rgba(39, 169, 255, .16) 1px, transparent 1px);
+  background-size: 52px 52px;
+  mask-image: linear-gradient(180deg, transparent, #000 25%, #000 75%, transparent);
+  animation: splash-grid-drift 4s linear both;
+}
+
+.security-splash__scan {
+  z-index: 3;
+  height: 2px;
+  inset: 0 0 auto;
+  background: linear-gradient(90deg, transparent, rgba(77, 208, 255, .05) 18%, rgba(92, 219, 255, .85) 50%, rgba(77, 208, 255, .05) 82%, transparent);
+  box-shadow: 0 0 18px 4px rgba(44, 181, 255, .28);
+  animation: splash-scan 2700ms cubic-bezier(.45, 0, .55, 1) 900ms infinite;
+}
+
+.security-splash__particles {
+  z-index: 4;
+  opacity: .42;
+  background-image: radial-gradient(circle, rgba(113, 224, 255, .8) 0 1px, transparent 1.5px), radial-gradient(circle, rgba(75, 150, 255, .65) 0 1px, transparent 1.5px);
+  background-position: 12% 23%, 74% 68%;
+  background-size: 121px 137px, 163px 191px;
+  animation: splash-particles 4000ms ease-in-out both;
+}
+
+.security-splash__glow {
+  z-index: 5;
+  pointer-events: none;
+  background: radial-gradient(ellipse 17% 25% at 50% 50%, rgba(0, 196, 255, .15), transparent 72%);
+  mix-blend-mode: screen;
+  animation: splash-glow 1800ms ease-in-out 650ms infinite alternate;
+}
+
+@keyframes splash-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes splash-image-settle {
+  from { transform: scale(1.03); filter: brightness(.55) saturate(.82); }
+  22% { filter: brightness(.78) saturate(.95); }
+  to { transform: scale(1); filter: brightness(1) saturate(1); }
+}
+
+@keyframes splash-scan {
+  from { transform: translateY(-8vh); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: .72; }
+  to { transform: translateY(108vh); opacity: 0; }
+}
+
+@keyframes splash-grid-drift {
+  from { background-position: 0 0; opacity: .04; }
+  35% { opacity: .18; }
+  to { background-position: 26px 26px; opacity: .12; }
+}
+
+@keyframes splash-particles {
+  from { transform: translateY(8px); opacity: 0; }
+  40% { opacity: .42; }
+  to { transform: translateY(-8px); opacity: .2; }
+}
+
+@keyframes splash-glow {
+  from { opacity: .45; transform: scale(.94); }
+  to { opacity: 1; transform: scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .security-splash { animation: splash-fade-in 300ms ease-out both; }
+  .security-splash__image { animation: splash-reduced-image 4000ms ease-out both; }
+  .security-splash__scan, .security-splash__grid, .security-splash__particles, .security-splash__glow { animation: none; }
+}
+
+@keyframes splash-reduced-image {
+  from { opacity: .25; }
+  to { opacity: 1; }
+}

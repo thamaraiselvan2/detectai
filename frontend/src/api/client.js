@@ -92,4 +92,26 @@ export const resetDemoDb = async () => {
   return response.data;
 };
 
+// ── Security / Device APIs ─────────────────────────────────────────────────
+
+export const demoLogin = async (username, password) => {
+  const response = await api.post('/api/demo-login', { username, password });
+  return response.data;
+};
+
+export const getDeviceStatus = async (username) => {
+  const response = await api.get(`/api/device-status/${username}`);
+  return response.data;
+};
+
+export const verifyDevice = async (username, token) => {
+  const response = await api.post('/api/verify-device', { username, token });
+  return response.data;
+};
+
+export const getLoginHistory = async (username, limit = 20) => {
+  const response = await api.get(`/api/login-history/${username}?limit=${limit}`);
+  return response.data;
+};
+
 export default api;

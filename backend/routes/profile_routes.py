@@ -1,11 +1,8 @@
 from flask import Blueprint, request, jsonify
 import json
 from database import query_db, execute_db
-from risk_engine.scoring import (
-    analyze_profile_risk,
-    analyze_demo_profile_similarity,
-    generate_recommendation,
-)
+from risk_engine.detector import detect_profile
+from risk_engine.scoring import analyze_demo_profile_similarity, generate_recommendation
 
 profile_bp = Blueprint('profile_bp', __name__)
 
@@ -60,8 +57,14 @@ def check_profile():
         FROM demo_profiles
     """)
 
-    # 3. Execute Explainable Risk Engine
-    analysis = analyze_profile_risk(target_profile, protected_profiles)
+    # 3. Execute Unified Detection Pipeline (rule-based + ML + LLM + explainability)
+    analysis = detect_profile(
+        target_profile,
+        protected_profiles,
+        ip_signal=0.0,    # will be non-zero when called from security-aware context
+        device_signal=0.0,
+        use_llm=True,
+    )
     demo_similarity = analyze_demo_profile_similarity(target_profile, demo_profiles)
     if demo_similarity["score_boost"]:
         analysis["risk_score"] = min(100, analysis["risk_score"] + demo_similarity["score_boost"])
@@ -97,10 +100,15 @@ def check_profile():
         "username": target_profile["username"],
         "classification": "FAKE" if analysis["risk_score"] >= 70 else "SUSPICIOUS" if analysis["risk_score"] >= 40 else "REAL",
         "risk_score": analysis["risk_score"],
+        "risk_level": analysis["risk_level"],
         "reasons": [factor["description"] for factor in analysis["factors"]],
         "profile": target_profile,
         "similar_profiles": similar_profiles,
-        "analysis": analysis
+        "analysis": analysis,
+        # New enrichment fields (backward-compatible — consumers can ignore)
+        "ml_result": analysis.get("ml_result"),
+        "llm_result": analysis.get("llm_result"),
+        "explanation": analysis.get("explanation"),
     })
 
 @profile_bp.route('/api/check-history', methods=['GET'])

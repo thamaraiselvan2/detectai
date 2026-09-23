@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from database import query_db, execute_db
-from risk_engine.scoring import analyze_profile_risk
+from risk_engine.detector import detect_profile
 from config import MONITORING_ALERT_THRESHOLD, EMAIL_CONFIG
 
 monitor_bp = Blueprint('monitor_bp', __name__)
@@ -45,8 +45,8 @@ def monitor_username():
             if demo["username"].lower() == prot["username"].lower():
                 continue
 
-            # Run analysis
-            analysis = analyze_profile_risk(demo, [prot])
+            # Run unified detection pipeline (no LLM for monitoring to conserve API calls)
+            analysis = detect_profile(demo, [prot], use_llm=False)
 
             if analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD and analysis["primary_match"]:
                 pair_key = (prot["id"], demo["id"])

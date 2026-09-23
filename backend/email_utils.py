@@ -100,3 +100,67 @@ This is an automated security alert from Fake Profile Detector.
             "exception_type": type(error).__name__,
             "message": str(error)
         }
+
+
+def send_device_verification_email(recipient, username, verify_link, ip_address="unknown", user_agent="unknown"):
+    """Sends a new-device login verification email using SMTP environment settings."""
+    host = os.getenv("MAIL_HOST", "").strip()
+    email_username = os.getenv("MAIL_USERNAME", "").strip()
+    password = os.getenv("MAIL_PASSWORD", "")
+    sender = os.getenv("MAIL_FROM", email_username).strip()
+    port = int(os.getenv("MAIL_PORT", "587"))
+    use_tls = os.getenv("MAIL_USE_TLS", "true").lower() == "true"
+
+    if not recipient or "@" not in recipient:
+        return {"sent": False, "status": "invalid_recipient"}
+
+    if not host or not sender or not email_username or not password:
+        # Email not configured — return demo-mode result
+        return {"sent": False, "status": "not_configured",
+                "message": "SMTP not configured. Set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD env vars."}
+
+    message = EmailMessage()
+    message["Subject"] = f"[Security Alert] New Device Login for @{username}"
+    message["From"] = sender
+    message["To"] = recipient
+    message.set_content(f"""Hello,
+
+A new device has attempted to log in to your account @{username}.
+
+Device details:
+  IP Address : {ip_address}
+  User Agent : {user_agent[:120]}
+
+If this was you, please verify this device by clicking the link below:
+{verify_link}
+
+If you did NOT attempt this login, you can safely ignore this email.
+Your account remains protected and the new device will NOT be granted access
+until verification is completed.
+
+This is an automated security alert from Fake Profile Detector.
+""")
+
+    smtp = None
+    try:
+        smtp = smtplib.SMTP(host, port, timeout=20)
+        smtp.ehlo()
+        if use_tls:
+            smtp.starttls()
+            smtp.ehlo()
+        smtp.login(email_username, password)
+        smtp.send_message(message)
+        smtp.quit()
+        return {"sent": True, "status": "sent"}
+    except (OSError, smtplib.SMTPException) as error:
+        if smtp is not None:
+            try:
+                smtp.quit()
+            except (OSError, smtplib.SMTPException):
+                pass
+        return {
+            "sent": False,
+            "status": "failed",
+            "exception_type": type(error).__name__,
+            "message": str(error)
+        }

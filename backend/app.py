@@ -10,6 +10,7 @@ from routes.protected_routes import protected_bp
 from routes.monitor_routes import monitor_bp
 from routes.demo_routes import demo_bp
 from routes.admin_routes import admin_bp
+from routes.security_routes import security_bp
 
 def create_app():
     """Initializes and configures the Flask application."""
@@ -22,6 +23,7 @@ def create_app():
     app.register_blueprint(monitor_bp)
     app.register_blueprint(demo_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(security_bp)
 
     @app.route('/')
     def index():

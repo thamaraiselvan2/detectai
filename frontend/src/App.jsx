@@ -4,9 +4,20 @@ import SecuritySplash from './components/SecuritySplash';
 import HomePage from './pages/HomePage';
 import InstantSearchPage from './pages/InstantSearchPage';
 import RegisterPage from './pages/RegisterPage';
+import MonitoringPage from './pages/MonitoringPage';
+import SandboxPage from './pages/SandboxPage';
+import ScannerPage from './pages/ScannerPage';
+import AdminDashboard from './pages/AdminDashboard';
+import ProtectedPage from './pages/ProtectedPage';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
+  const [toast, setToast] = useState(null);
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3500);
+  };
 
   return (
     <>
@@ -23,19 +34,27 @@ export default function App() {
           />
         </div>
 
+        {/* Global Toast Notification */}
+        {toast && (
+          <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-xl shadow-xl text-sm font-mono font-semibold border transition-all animate-in slide-in-from-bottom-4 fade-in duration-300 ${
+            toast.type === 'success' ? 'bg-emerald-900/90 border-emerald-500/50 text-emerald-200' :
+            toast.type === 'error'   ? 'bg-red-900/90 border-red-500/50 text-red-200' :
+            'bg-slate-800/90 border-cyan-500/40 text-cyan-200'
+          }`}>
+            {toast.message}
+          </div>
+        )}
+
         {/* Main Content Body */}
         <main className="relative z-10 flex-1 flex flex-col">
-          {activeTab === 'home' && (
-            <HomePage onNavigate={(tab) => setActiveTab(tab)} />
-          )}
-          
-          {activeTab === 'search' && (
-            <InstantSearchPage onBackToHome={() => setActiveTab('home')} />
-          )}
-          
-          {activeTab === 'register' && (
-            <RegisterPage onBackToHome={() => setActiveTab('home')} />
-          )}
+          {activeTab === 'home'       && <HomePage onNavigate={(tab) => setActiveTab(tab)} />}
+          {activeTab === 'search'     && <InstantSearchPage onBackToHome={() => setActiveTab('home')} />}
+          {activeTab === 'register'   && <RegisterPage onBackToHome={() => setActiveTab('home')} />}
+          {activeTab === 'monitoring' && <MonitoringPage onToast={showToast} />}
+          {activeTab === 'sandbox'    && <SandboxPage onToast={showToast} />}
+          {activeTab === 'scanner'    && <ScannerPage onToast={showToast} />}
+          {activeTab === 'protected'  && <ProtectedPage onToast={showToast} />}
+          {activeTab === 'admin'      && <AdminDashboard onToast={showToast} />}
         </main>
 
         {/* Security Product Footer */}

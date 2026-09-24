@@ -45,8 +45,13 @@ def monitor_username():
             if demo["username"].lower() == prot["username"].lower():
                 continue
 
-            # Run unified detection pipeline (no LLM for monitoring to conserve API calls)
-            analysis = detect_profile(demo, [prot], use_llm=False)
+            # Run the same unified detection pipeline, including optional LLM analysis.
+            analysis = detect_profile(
+                demo,
+                [prot],
+                demo_profiles=demo_profiles,
+                use_llm=True,
+            )
 
             if analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD and analysis["primary_match"]:
                 pair_key = (prot["id"], demo["id"])

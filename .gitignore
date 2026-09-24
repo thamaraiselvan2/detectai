@@ -10,6 +10,7 @@ env/
 backend/*.db
 backend/static/uploads/*
 !backend/static/uploads/.gitkeep
+data/cresci17_subset/
 
 # Node dependencies and build output
 node_modules/

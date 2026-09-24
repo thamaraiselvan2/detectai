@@ -11,7 +11,15 @@ Combines:
 Both profile_routes.py and monitor_routes.py call detect_profile() — same pipeline.
 """
 
-from .scoring import analyze_profile_risk, generate_recommendation
+from .llm_content_analyzer import (
+    analyze_content as llm_analyze,
+    generate_explanation as llm_explain,
+)
+from .scoring import (
+    analyze_demo_profile_similarity,
+    analyze_profile_risk,
+    generate_recommendation,
+)
 
 # ML pipeline — graceful fallback if not available
 try:
@@ -25,12 +33,10 @@ try:
 except Exception:
     _ML_AVAILABLE = False
 
-from .llm_content_analyzer import analyze_content as llm_analyze
-
-
 def detect_profile(
     target_profile: dict,
     protected_profiles: list = None,
+    demo_profiles: list = None,
     ip_signal: float = 0.0,
     device_signal: float = 0.0,
     use_llm: bool = True,
@@ -41,6 +47,7 @@ def detect_profile(
     Args:
         target_profile: dict with username, display_name, bio, followers_count, etc.
         protected_profiles: list of protected profile dicts to compare against
+        demo_profiles: list of demo profile dicts for identity similarity
         ip_signal: 0.0–1.0 IP suspicion score from security layer
         device_signal: 0.0–1.0 device suspicion score from security layer
         use_llm: whether to invoke LLM analysis (set False for monitoring to save cost)
@@ -49,6 +56,8 @@ def detect_profile(
         Enriched result dict that is backward-compatible with the existing API response.
     """
     protected_profiles = protected_profiles or []
+    demo_profiles_provided = demo_profiles is not None
+    demo_profiles = demo_profiles or []
 
     # ── Step 1: Existing Rule-Based Risk Engine ────────────────────────────────
     analysis = analyze_profile_risk(target_profile, protected_profiles)
@@ -124,14 +133,15 @@ def detect_profile(
                 username=target_profile.get("username", ""),
                 display_name=target_profile.get("display_name", ""),
             )
-            if llm_result and llm_result.get("phishing_intent_score", 0) > 0.6:
-                llm_boost = int(llm_result["phishing_intent_score"] * 15)
+            semantic_risk = llm_result.get("semantic_risk") if llm_result else None
+            if isinstance(semantic_risk, (int, float)) and semantic_risk > 0.6:
+                llm_boost = int(semantic_risk * 15)
                 risk_score = min(100, risk_score + llm_boost)
                 factors.append({
                     "category": "LLM Semantic Analysis",
                     "points": llm_boost,
                     "severity": "high" if llm_result["phishing_intent_score"] > 0.8 else "medium",
-                    "description": f"AI semantic analysis detected suspicious content: {llm_result.get('rationale', '')}"
+                    "description": f"AI semantic analysis detected suspicious content: {llm_result.get('explanation') or llm_result.get('rationale', '')}"
                 })
             if llm_result and llm_result.get("impersonation_claim"):
                 risk_score = min(100, risk_score + 10)
@@ -144,7 +154,20 @@ def detect_profile(
         except Exception as e:
             print(f"[DETECTOR] LLM analysis failed (non-fatal): {e}")
 
-    # ── Step 5: Recalculate risk level after all boosts ───────────────────────
+    # ── Step 5: Shared demo-identity similarity signal ────────────────────────
+    # This is intentionally the existing score boost, now owned by the shared
+    # detector so Scanner and Monitoring cannot diverge.
+    demo_similarity = analyze_demo_profile_similarity(target_profile, demo_profiles)
+    if demo_similarity["score_boost"]:
+        risk_score = min(100, risk_score + demo_similarity["score_boost"])
+        factors.extend({
+            "category": "Demo Profile Impersonation",
+            "points": demo_similarity["score_boost"],
+            "severity": "critical",
+            "description": reason,
+        } for reason in demo_similarity["reasons"])
+
+    # ── Step 6: Recalculate risk level after all boosts ───────────────────────
     if risk_score >= 80:
         risk_level = "CRITICAL"
     elif risk_score >= 60:
@@ -156,30 +179,61 @@ def detect_profile(
 
     recommendation = generate_recommendation(risk_level, analysis.get("primary_match"))
 
-    # ── Step 6: Plain-Language Explanation ────────────────────────────────────
+    # ── Step 7: Plain-Language Explanation ────────────────────────────────────
+    demo_candidates = demo_similarity.get("similar_profiles", [])
+    strongest_demo = demo_candidates[0] if demo_candidates else {}
     explanation = _build_explanation(
         risk_level, risk_score, factors, ml_result, llm_result,
         device_signal, ip_signal, analysis.get("primary_match")
     )
 
+    classification = "FAKE" if risk_score >= 70 else "SUSPICIOUS" if risk_score >= 40 else "REAL"
+    llm_explanation = llm_explain({
+        "classification": classification,
+        "risk_score": risk_score,
+        "ml_probability": ml_result.get("ml_probability") if ml_result else None,
+        "username_similarity": strongest_demo.get("username_similarity", 0.0),
+        "profile_similarity": strongest_demo.get("similarity_score", 0.0),
+        "avatar_similarity": bool(strongest_demo.get("avatar_similarity", False)),
+        "account_age_days": target_profile.get("account_age_days"),
+        "behavioral_signals": analysis.get("behavior_metrics", {}),
+        "ip_signal": ip_signal,
+        "device_signal": device_signal,
+        "reasons": [factor.get("description", "") for factor in factors[:6]],
+    })
+    explanation["llm_explanation"] = llm_explanation.get("explanation")
+
     # Return enriched result — backward-compatible (same top-level keys as before)
+    returned_similar_profiles = demo_candidates if demo_profiles_provided else analysis.get("similar_profiles", [])
+
     return {
         # ── Existing keys (unchanged format) ──────────────────────────────────
         "risk_score": risk_score,
         "risk_level": risk_level,
         "primary_match": analysis.get("primary_match"),
-        "similar_profiles": analysis.get("similar_profiles", []),
+        "similar_profiles": returned_similar_profiles,
         "factors": factors,
         "recommendation": recommendation,
         "behavior_metrics": analysis.get("behavior_metrics", {}),
         # ── New enrichment keys ────────────────────────────────────────────────
         "ml_result": ml_result,
         "llm_result": llm_result,
+        "llm_explanation": llm_explanation,
         "explanation": explanation,
         "security_signals": {
             "ip_signal": ip_signal,
             "device_signal": device_signal,
-        }
+        },
+        "identity_signals": {
+            "username_similarity": strongest_demo.get("username_similarity", 0.0),
+            "display_name_similarity": strongest_demo.get("display_name_similarity", 0.0),
+            "bio_similarity": strongest_demo.get("bio_similarity", 0.0),
+            "avatar_similarity": bool(strongest_demo.get("avatar_similarity", False)),
+            "similarity_score": strongest_demo.get("similarity_score", 0.0),
+            "score_boost": demo_similarity.get("score_boost", 0),
+        },
+        "profile_signals": analysis.get("behavior_metrics", {}),
+        "demo_similarity": demo_similarity,
     }
 
 

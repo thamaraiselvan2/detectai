@@ -16,17 +16,40 @@ import json
 import re
 
 
+def _provider_prompt(prompt: str) -> dict:
+    """Call the configured provider once and return parsed JSON, or None."""
+    try:
+        if os.getenv("GEMINI_API_KEY", "").strip():
+            import google.generativeai as genai
+            genai.configure(api_key=os.getenv("GEMINI_API_KEY").strip())
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
+            text = response.text.strip()
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            text = re.sub(r'\s*```$', '', text)
+            return json.loads(text), "gemini"
+
+        if os.getenv("OPENAI_API_KEY", "").strip():
+            import openai
+            client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY").strip())
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.1,
+            )
+            text = response.choices[0].message.content.strip()
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            text = re.sub(r'\s*```$', '', text)
+            return json.loads(text), "openai"
+    except Exception as error:
+        print(f"[LLM] Provider request failed: {type(error).__name__}: {error}")
+    return None
+
+
 def _analyze_with_gemini(bio: str, username: str, display_name: str) -> dict:
     """Calls Google Gemini API for semantic impersonation analysis."""
     try:
-        import google.generativeai as genai
-        api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not api_key:
-            return None
-
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
         prompt = f"""You are a cybersecurity analyst specializing in fake profile and impersonation detection.
 
 Analyze the following social media profile for fake/impersonation signals:
@@ -37,23 +60,21 @@ Bio: {bio}
 
 Respond ONLY with a valid JSON object (no markdown, no explanation):
 {{
-  "phishing_intent_score": <float 0.0-1.0>,
-  "impersonation_claim": <true|false>,
-  "rationale": "<brief 1-2 sentence explanation>"
+    "semantic_risk": <float 0.0-1.0>,
+    "phishing_intent_score": <float 0.0-1.0>,
+    "impersonation_claim": <true|false>,
+    "impersonation_indicators": ["<indicator>"],
+    "phishing_indicators": ["<indicator>"],
+    "explanation": "<brief evidence-based explanation>"
 }}
 
 Guidelines:
 - phishing_intent_score: 0.0 = clearly genuine, 1.0 = clear phishing/scam
+- semantic_risk must reflect only the supplied username, display name, and bio.
 - impersonation_claim: true if bio/username explicitly claims to be a famous person or official account
-- Keep rationale factual and concise"""
-
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        # Strip markdown code fences if present
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        result = json.loads(text)
-        return _validate_result(result)
+- Keep explanation factual and concise. Do not invent profile facts."""
+        response = _provider_prompt(prompt)
+        return _validate_result(response[0]) if response else None
 
     except Exception as e:
         print(f"[LLM] Gemini analysis failed: {e}")
@@ -63,12 +84,6 @@ Guidelines:
 def _analyze_with_openai(bio: str, username: str, display_name: str) -> dict:
     """Calls OpenAI API for semantic impersonation analysis."""
     try:
-        import openai
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            return None
-
-        client = openai.OpenAI(api_key=api_key)
         prompt = f"""You are a cybersecurity analyst specializing in fake profile detection.
 
 Analyze this social media profile:
@@ -77,19 +92,10 @@ Display Name: {display_name}
 Bio: {bio}
 
 Respond ONLY with JSON (no markdown):
-{{"phishing_intent_score": <0.0-1.0>, "impersonation_claim": <true|false>, "rationale": "<brief>"}}"""
-
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
-            temperature=0.1
-        )
-        text = response.choices[0].message.content.strip()
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        result = json.loads(text)
-        return _validate_result(result)
+{{"semantic_risk": <0.0-1.0>, "phishing_intent_score": <0.0-1.0>, "impersonation_claim": <true|false>, "impersonation_indicators": [], "phishing_indicators": [], "explanation": "<brief evidence-based explanation>"}}
+Do not invent profile facts."""
+        response = _provider_prompt(prompt)
+        return _validate_result(response[0]) if response else None
 
     except Exception as e:
         print(f"[LLM] OpenAI analysis failed: {e}")
@@ -98,21 +104,34 @@ Respond ONLY with JSON (no markdown):
 
 def _validate_result(result: dict) -> dict:
     """Validates and sanitises LLM response."""
-    score = float(result.get("phishing_intent_score", 0.0))
+    score = float(result.get("semantic_risk", result.get("phishing_intent_score", 0.0)))
     score = max(0.0, min(1.0, score))
+    phishing_score = float(result.get("phishing_intent_score", score))
+    phishing_score = max(0.0, min(1.0, phishing_score))
+    to_indicators = lambda value: [str(item)[:200] for item in value[:5]] if isinstance(value, list) else []
+    explanation = str(result.get("explanation", result.get("rationale", "")))[:500]
     return {
-        "phishing_intent_score": round(score, 3),
+        "semantic_risk": round(score, 3),
+        "phishing_intent_score": round(phishing_score, 3),
         "impersonation_claim": bool(result.get("impersonation_claim", False)),
-        "rationale": str(result.get("rationale", ""))[:500],
+        "impersonation_indicators": to_indicators(result.get("impersonation_indicators", [])),
+        "phishing_indicators": to_indicators(result.get("phishing_indicators", [])),
+        "explanation": explanation,
+        "rationale": explanation,
     }
 
 
 def _not_configured() -> dict:
     """Returned when no LLM API key is present."""
     return {
-        "phishing_intent_score": 0.0,
+        "llm_status": "unavailable",
+        "semantic_risk": None,
+        "phishing_intent_score": None,
         "impersonation_claim": False,
-        "rationale": "LLM content analysis not configured (no API key set).",
+        "impersonation_indicators": [],
+        "phishing_indicators": [],
+        "explanation": None,
+        "rationale": "LLM content analysis unavailable (no API key set).",
         "llm_used": None,
     }
 
@@ -121,13 +140,7 @@ def analyze_content(bio: str, username: str = "", display_name: str = "") -> dic
     """
     Main entry point. Analyzes bio/username for semantic impersonation signals.
 
-    Returns:
-        {
-          "phishing_intent_score": float,   # 0.0–1.0
-          "impersonation_claim": bool,
-          "rationale": str,
-          "llm_used": str | None
-        }
+        Returns structured semantic analysis or ``llm_status=unavailable``.
     Never raises an exception — always returns a safe dict.
     """
     bio = (bio or "").strip()
@@ -143,6 +156,7 @@ def analyze_content(bio: str, username: str = "", display_name: str = "") -> dic
         result = _analyze_with_gemini(bio, username, display_name)
         if result:
             result["llm_used"] = "gemini"
+            result["llm_status"] = "available"
             return result
 
     # Fallback to OpenAI
@@ -150,6 +164,40 @@ def analyze_content(bio: str, username: str = "", display_name: str = "") -> dic
         result = _analyze_with_openai(bio, username, display_name)
         if result:
             result["llm_used"] = "openai"
+            result["llm_status"] = "available"
             return result
 
     return _not_configured()
+
+
+def generate_explanation(signals: dict) -> dict:
+    """Generate an explanation from already-computed backend signals only."""
+    safe_signals = {
+        "classification": signals.get("classification"),
+        "risk_score": signals.get("risk_score"),
+        "ml_probability": signals.get("ml_probability"),
+        "username_similarity": signals.get("username_similarity"),
+        "profile_similarity": signals.get("profile_similarity"),
+        "avatar_similarity": signals.get("avatar_similarity"),
+        "account_age_days": signals.get("account_age_days"),
+        "behavioral_signals": signals.get("behavioral_signals", {}),
+        "ip_signal": signals.get("ip_signal"),
+        "device_signal": signals.get("device_signal"),
+        "reasons": signals.get("reasons", []),
+    }
+    if not (os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()):
+        return {"llm_status": "unavailable", "llm_used": None, "explanation": None}
+
+    prompt = """You explain a fake-profile detection result using only the supplied backend signals.
+Do not invent facts, add evidence, or change the classification. Return JSON only:
+{"explanation":"<concise evidence-based explanation>"}
+
+Backend signals:
+""" + json.dumps(safe_signals, ensure_ascii=True)
+    response = _provider_prompt(prompt)
+    if not response or not isinstance(response[0], dict):
+        return {"llm_status": "unavailable", "llm_used": None, "explanation": None}
+    explanation = str(response[0].get("explanation", ""))[:800].strip()
+    if not explanation:
+        return {"llm_status": "unavailable", "llm_used": None, "explanation": None}
+    return {"llm_status": "available", "llm_used": response[1], "explanation": explanation}

@@ -22,6 +22,7 @@ from risk_engine.string_metrics import (
 )
 from risk_engine.behavior_metrics import analyze_behavior_and_ratios
 from risk_engine.bio_analyzer import analyze_bio_and_content, PHISHING_KEYWORDS
+from risk_engine.avatar_similarity import are_similar_avatars
 
 # ── Feature names (must match the order of extract_features output) ──────────
 FEATURE_NAMES = [
@@ -34,6 +35,7 @@ FEATURE_NAMES = [
     "post_count_norm",              # log1p(posts_count) / log1p(10000)
     "posting_rate",                 # posts / max(account_age_days, 1)
     "avatar_present",               # 1 if has non-default avatar else 0
+    "avatar_similarity_max",        # exact avatar reference match to a protected profile
     "has_phishing_keywords",        # 1 if bio contains phishing patterns
     "has_suspicious_username",      # 1 if username matches bot patterns
     "has_suspicious_affix",         # 1 if username contains impersonation affix
@@ -102,14 +104,16 @@ def extract_features(
 
     # ── Similarity features (vs. protected profiles) ──────────────────────────
     username_sim_max = 0.0
-    levenshtein_min_norm = 1.0  # 1.0 = identical, 0.0 = completely different
+    levenshtein_min_norm = 0.0  # 1.0 = identical; 0.0 also means no comparison target
     name_sim_max = 0.0
     bio_sim_max = 0.0
+    avatar_similarity_max = 0.0
 
     for prot in protected_profiles:
         pu = (prot.get("username") or "").strip().lower()
         pn = (prot.get("display_name") or "").strip()
         pb = (prot.get("bio") or "").strip()
+        pa = (prot.get("avatar_url") or "").strip()
 
         if not pu or pu == username:
             continue
@@ -128,6 +132,9 @@ def extract_features(
         if pb:
             b_sim = calculate_sequence_similarity(bio.lower(), pb.lower())
             bio_sim_max = max(bio_sim_max, b_sim)
+
+        if are_similar_avatars(avatar_url, pa):
+            avatar_similarity_max = 1.0
 
     # ── Behavioral features ────────────────────────────────────────────────────
     behavior = analyze_behavior_and_ratios(profile)
@@ -166,6 +173,7 @@ def extract_features(
         round(post_norm, 4),
         round(posting_rate_norm, 4),
         round(has_avatar, 4),
+        round(avatar_similarity_max, 4),
         round(has_phishing, 4),
         round(has_suspicious_username, 4),
         round(has_affix, 4),

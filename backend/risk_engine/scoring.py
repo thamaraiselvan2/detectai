@@ -6,6 +6,7 @@ from .string_metrics import (
 )
 from .behavior_metrics import analyze_behavior_and_ratios
 from .bio_analyzer import analyze_bio_and_content
+from .avatar_similarity import are_similar_avatars
 
 
 def analyze_demo_profile_similarity(target_profile: dict, demo_profiles: list = None) -> dict:
@@ -30,9 +31,8 @@ def analyze_demo_profile_similarity(target_profile: dict, demo_profiles: list = 
         bio_similarity = calculate_sequence_similarity(
             target_profile.get("bio") or "", candidate.get("bio") or ""
         )
-        avatar_similarity = bool(
-            target_profile.get("avatar_url") and
-            target_profile.get("avatar_url") == candidate.get("avatar_url")
+        avatar_similarity = are_similar_avatars(
+            target_profile.get("avatar_url"), candidate.get("avatar_url")
         )
         similarity = (
             handle_similarity * 0.55 + display_similarity * 0.2 +
@@ -57,6 +57,10 @@ def analyze_demo_profile_similarity(target_profile: dict, demo_profiles: list = 
             "account_age_days": candidate.get("account_age_days", 0),
             "created_at": candidate_created_at,
             "is_verified": candidate.get("is_verified", 0),
+            "avatar_similarity": avatar_similarity,
+            "username_similarity": round(handle_similarity, 4),
+            "display_name_similarity": round(display_similarity, 4),
+            "bio_similarity": round(bio_similarity, 4),
             "similarity_score": round(similarity * 100, 1),
             "is_older": candidate_is_older
         }

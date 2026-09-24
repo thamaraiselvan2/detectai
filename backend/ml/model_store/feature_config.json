@@ -1,0 +1,39 @@
+{
+  "feature_names": [
+    "username_similarity_max",
+    "username_levenshtein_min",
+    "name_similarity_max",
+    "bio_similarity_max",
+    "follower_following_ratio",
+    "account_age_days_norm",
+    "post_count_norm",
+    "posting_rate",
+    "avatar_present",
+    "avatar_similarity_max",
+    "has_phishing_keywords",
+    "has_suspicious_username",
+    "has_suspicious_affix",
+    "username_entropy",
+    "follower_count_log",
+    "following_count_log",
+    "is_verified",
+    "bio_empty",
+    "ip_signal",
+    "device_signal"
+  ],
+  "model_type": "RandomForest",
+  "baseline_model_path": "C:\\Users\\Thamaraiselvan R\\OneDrive\\Desktop\\detectAi\\detectai\\backend\\ml\\model_store\\logistic_regression.pkl",
+  "model_path": "C:\\Users\\Thamaraiselvan R\\OneDrive\\Desktop\\detectAi\\detectai\\backend\\ml\\model_store\\model.pkl",
+  "n_train_samples": 3572,
+  "n_test_samples": 893,
+  "baseline_model_type": "LogisticRegression",
+  "baseline_test_accuracy": 0.869,
+  "test_accuracy": 0.963,
+  "dataset_path": "C:\\Users\\Thamaraiselvan R\\OneDrive\\Desktop\\detectAi\\detectai\\data\\cresci17_subset",
+  "random_state": 42,
+  "test_size": 0.2,
+  "class_distribution": {
+    "fake": 991,
+    "genuine": 3474
+  }
+}

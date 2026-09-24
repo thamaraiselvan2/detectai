@@ -50,12 +50,20 @@ def is_model_available() -> bool:
 def get_model_info() -> dict:
     """Returns model config info for API responses."""
     if not _load_model() or _config is None:
-        return {"available": False, "model_type": None}
+        return {
+            "available": False,
+            "model_type": None,
+            "message": "ML unavailable: no trained model artifact is present.",
+        }
     return {
         "available": True,
         "model_type": _config.get("model_type"),
         "n_train_samples": _config.get("n_train_samples"),
-        "train_accuracy": _config.get("train_accuracy"),
+        "n_test_samples": _config.get("n_test_samples"),
+        "test_accuracy": _config.get("test_accuracy"),
+        "baseline_model_type": _config.get("baseline_model_type"),
+        "baseline_test_accuracy": _config.get("baseline_test_accuracy"),
+        "dataset_path": _config.get("dataset_path"),
     }
 
 
@@ -71,16 +79,29 @@ def predict(feature_vector: list) -> dict | None:
         or None if no model is available.
     """
     if not _load_model() or _model is None:
-        return None
+        return {
+            "available": False,
+            "ml_probability": None,
+            "ml_prediction": None,
+            "ml_model_type": None,
+            "message": "ML unavailable: train a model from a labeled CSV first.",
+        }
 
     try:
         prob = _model.predict_proba([feature_vector])[0][1]
         pred = int(_model.predict([feature_vector])[0])
         return {
+            "available": True,
             "ml_probability": round(float(prob), 4),
             "ml_prediction": pred,
             "ml_model_type": _config.get("model_type", "unknown") if _config else "unknown",
         }
     except Exception as e:
         print(f"[ML] Prediction error: {e}")
-        return None
+        return {
+            "available": False,
+            "ml_probability": None,
+            "ml_prediction": None,
+            "ml_model_type": None,
+            "message": f"ML unavailable: prediction failed ({type(e).__name__}).",
+        }

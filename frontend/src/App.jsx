@@ -13,10 +13,23 @@ import ProtectedPage from './pages/ProtectedPage';
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [toast, setToast] = useState(null);
+  const [scannerTarget, setScannerTarget] = useState(null);
 
-  const showToast = (message, type = 'info') => {
-    setToast({ message, type });
+  const showToast = (notification, type = 'info') => {
+    const nextToast = typeof notification === 'object'
+      ? notification
+      : { message: notification, type };
+
+    setToast({
+      message: nextToast.message || '',
+      type: nextToast.type || 'info'
+    });
     setTimeout(() => setToast(null), 3500);
+  };
+
+  const scanTarget = (target) => {
+    setScannerTarget(target);
+    setActiveTab('scanner');
   };
 
   return (
@@ -51,9 +64,9 @@ export default function App() {
           {activeTab === 'search'     && <InstantSearchPage onBackToHome={() => setActiveTab('home')} />}
           {activeTab === 'register'   && <RegisterPage onBackToHome={() => setActiveTab('home')} />}
           {activeTab === 'monitoring' && <MonitoringPage onToast={showToast} />}
-          {activeTab === 'sandbox'    && <SandboxPage onToast={showToast} />}
-          {activeTab === 'scanner'    && <ScannerPage onToast={showToast} />}
-          {activeTab === 'protected'  && <ProtectedPage onToast={showToast} />}
+          {activeTab === 'sandbox'    && <SandboxPage onScanTarget={scanTarget} onToast={showToast} />}
+          {activeTab === 'scanner'    && <ScannerPage initialTarget={scannerTarget} onToast={showToast} />}
+          {activeTab === 'protected'  && <ProtectedPage onNavigateToMonitoring={() => setActiveTab('monitoring')} onToast={showToast} />}
           {activeTab === 'admin'      && <AdminDashboard onToast={showToast} />}
         </main>
 

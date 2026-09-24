@@ -25,6 +25,34 @@ def init_db():
     if "password" not in cols:
         cursor.execute("ALTER TABLE demo_profiles ADD COLUMN password TEXT")
 
+    cursor.execute("PRAGMA table_info(trusted_devices)")
+    trusted_device_cols = [row["name"] for row in cursor.fetchall()]
+    if "account_id" not in trusted_device_cols:
+        cursor.execute("ALTER TABLE trusted_devices ADD COLUMN account_id INTEGER")
+
+    cursor.execute("PRAGMA table_info(login_history)")
+    login_history_cols = [row["name"] for row in cursor.fetchall()]
+    if "account_id" not in login_history_cols:
+        cursor.execute("ALTER TABLE login_history ADD COLUMN account_id INTEGER")
+    if "registered_email" not in login_history_cols:
+        cursor.execute("ALTER TABLE login_history ADD COLUMN registered_email TEXT")
+    if "verification_expires_at" not in login_history_cols:
+        cursor.execute("ALTER TABLE login_history ADD COLUMN verification_expires_at DATETIME")
+
+    # Migrate legacy protected registrations into the operational registry.
+    cursor.execute("""
+        INSERT OR IGNORE INTO protected_profiles
+            (username, display_name, email, bio, avatar_url, follower_count, is_monitoring_active)
+        SELECT d.username, d.display_name, r.email, d.bio, d.avatar_url,
+               d.followers_count, 1
+        FROM registered_profiles r
+        JOIN demo_profiles d ON d.id = r.original_profile_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM protected_profiles p
+            WHERE LOWER(p.username) = LOWER(r.username)
+        )
+    """)
+
     conn.commit()
     conn.close()
 

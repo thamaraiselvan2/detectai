@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
 -- Tracks trusted devices per demo-social user (keyed by demo_profile username)
 CREATE TABLE IF NOT EXISTS trusted_devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,                 -- demo_profiles.id
     username TEXT NOT NULL,            -- demo_profiles.username
     device_fingerprint TEXT NOT NULL,  -- SHA256(User-Agent + /24 subnet)
     user_agent TEXT,
@@ -100,13 +101,16 @@ CREATE TABLE IF NOT EXISTS trusted_devices (
 -- Full login event history for audit trail and IP/device signal analysis
 CREATE TABLE IF NOT EXISTS login_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER,                 -- demo_profiles.id
     username TEXT NOT NULL,
+    registered_email TEXT,
     ip_address TEXT,
     device_fingerprint TEXT,
     user_agent TEXT,
     login_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     verification_required INTEGER DEFAULT 0,
     verification_token TEXT,
+    verification_expires_at DATETIME,
     verified INTEGER DEFAULT 0,
     verified_at DATETIME
 );

@@ -2,7 +2,6 @@ from flask import Blueprint, request, jsonify
 import json
 from database import query_db, execute_db
 from risk_engine.detector import detect_profile
-from risk_engine.scoring import analyze_demo_profile_similarity, generate_recommendation
 
 profile_bp = Blueprint('profile_bp', __name__)
 
@@ -61,22 +60,11 @@ def check_profile():
     analysis = detect_profile(
         target_profile,
         protected_profiles,
+        demo_profiles=demo_profiles,
         ip_signal=0.0,    # will be non-zero when called from security-aware context
         device_signal=0.0,
         use_llm=True,
     )
-    demo_similarity = analyze_demo_profile_similarity(target_profile, demo_profiles)
-    if demo_similarity["score_boost"]:
-        analysis["risk_score"] = min(100, analysis["risk_score"] + demo_similarity["score_boost"])
-        analysis["risk_level"] = "CRITICAL" if analysis["risk_score"] >= 80 else "HIGH" if analysis["risk_score"] >= 60 else "MEDIUM" if analysis["risk_score"] >= 30 else "LOW"
-        analysis["recommendation"] = generate_recommendation(analysis["risk_level"])
-        analysis["factors"].extend({
-            "category": "Demo Profile Impersonation",
-            "points": demo_similarity["score_boost"],
-            "severity": "critical",
-            "description": reason
-        } for reason in demo_similarity["reasons"])
-    similar_profiles = demo_similarity["similar_profiles"]
 
     # 4. Record Scan in check_history audit table
     matched_id = analysis["primary_match"]["protected_id"] if analysis["primary_match"] else None
@@ -103,7 +91,7 @@ def check_profile():
         "risk_level": analysis["risk_level"],
         "reasons": [factor["description"] for factor in analysis["factors"]],
         "profile": target_profile,
-        "similar_profiles": similar_profiles,
+        "similar_profiles": analysis.get("similar_profiles", []),
         "analysis": analysis,
         # New enrichment fields (backward-compatible — consumers can ignore)
         "ml_result": analysis.get("ml_result"),

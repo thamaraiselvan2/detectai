@@ -10,7 +10,7 @@ Endpoints:
 import hashlib
 import secrets
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify
 from werkzeug.security import check_password_hash
 from database import query_db, execute_db
@@ -18,6 +18,7 @@ from email_utils import send_device_verification_email
 
 security_bp = Blueprint('security_bp', __name__)
 VERIFICATION_TOKEN_MINUTES = 15
+EMAIL_STATUSES = {"sent", "not_configured", "failed", "skipped", "duplicate"}
 
 
 def _get_client_ip(req) -> str:
@@ -40,6 +41,16 @@ def _get_device_fingerprint(req) -> str:
     subnet = ".".join(ip.split(".")[:3]) if "." in ip else ip
     raw = f"{user_agent}|{subnet}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def _hash_authorization_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _network_hint(ip_address):
+    if not ip_address or "." not in ip_address:
+        return "unknown network"
+    return ".".join(ip_address.split(".")[:3]) + ".*"
 
 
 @security_bp.route('/api/demo-login', methods=['POST'])
@@ -94,16 +105,17 @@ def demo_login():
     device_trust_status = "unknown"
 
     def request_device_verification(existing_login_id=None):
-        verification_token = secrets.token_urlsafe(32)
-        verification_expires_at = datetime.utcnow() + timedelta(minutes=VERIFICATION_TOKEN_MINUTES)
+        raw_verification_token = secrets.token_urlsafe(32)
+        verification_token = _hash_authorization_token(raw_verification_token)
+        verification_expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=VERIFICATION_TOKEN_MINUTES)
 
         if existing_login_id:
             execute_db("""
                 UPDATE login_history
                 SET account_id = ?, username = ?, registered_email = ?, ip_address = ?,
                     device_fingerprint = ?, user_agent = ?, login_at = CURRENT_TIMESTAMP,
-                    verification_token = ?, verification_expires_at = ?, verified = 0,
-                    verification_required = 1, verified_at = NULL
+                    verification_token = ?, verification_expires_at = ?, authorization_status = 'PENDING',
+                    authorization_used_at = NULL, verified = 0, verification_required = 1, verified_at = NULL
                 WHERE id = ?
             """, (profile["id"], username, registered_email, ip_address, device_fingerprint,
                   user_agent, verification_token, verification_expires_at, existing_login_id))
@@ -111,20 +123,25 @@ def demo_login():
             execute_db("""
                 INSERT INTO login_history
                     (account_id, username, registered_email, ip_address, device_fingerprint, user_agent,
-                     verification_required, verification_token, verification_expires_at, verified)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0)
+                     verification_required, verification_token, verification_expires_at,
+                     authorization_status, verified)
+                 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 'PENDING', 0)
             """, (profile["id"], username, registered_email, ip_address, device_fingerprint,
                   user_agent, verification_token, verification_expires_at))
 
         email_result = {"status": "no_registered_email"}
         if registered_email:
-            verify_url = f"http://localhost:5000/api/verify-device?token={verification_token}"
+            verify_url = f"http://localhost:5000/api/device-authorization/approve?token={raw_verification_token}"
+            deny_url = f"http://localhost:5000/api/device-authorization/deny?token={raw_verification_token}"
             email_result = send_device_verification_email(
                 recipient=registered_email,
                 username=username,
                 verify_link=verify_url,
                 ip_address=ip_address,
-                user_agent=user_agent
+                user_agent=user_agent,
+                deny_link=deny_url,
+                network_hint=_network_hint(ip_address),
+                device_hint="new browser or device",
             )
 
         if email_result.get("sent"):
@@ -134,6 +151,10 @@ def demo_login():
         else:
             message = "New device detected. Verification is required before this device can be trusted."
 
+        email_status = email_result.get("status")
+        if email_status not in EMAIL_STATUSES:
+            email_status = "skipped"
+
         return jsonify({
             "status": "verification_required",
             "message": message,
@@ -141,7 +162,12 @@ def demo_login():
             "username": username,
             "device_trust_status": "new_device_verification_required",
             "verification_required": True,
-            "email_result": email_result,
+            "email_result": {"status": email_status},
+            "alert": {
+                "triggered": True,
+                "type": "new_device_login",
+                "email_status": email_status,
+            },
         }), 202
 
     if existing_device and existing_device["is_trusted"]:
@@ -155,6 +181,7 @@ def demo_login():
             SELECT id FROM login_history
             WHERE username = ? AND device_fingerprint = ?
               AND verification_required = 1 AND verified = 0
+                            AND COALESCE(authorization_status, 'PENDING') = 'PENDING'
               AND verification_expires_at > CURRENT_TIMESTAMP
             ORDER BY login_at DESC LIMIT 1
         """, (username, device_fingerprint), one=True)
@@ -167,12 +194,18 @@ def demo_login():
                 "device_trust_status": "pending_verification",
                 "verification_required": True,
                 "email_result": {"status": "already_sent"},
+                "alert": {
+                    "triggered": True,
+                    "type": "new_device_login",
+                    "email_status": "duplicate",
+                },
             }), 202
 
         expired_login = query_db("""
             SELECT id FROM login_history
             WHERE username = ? AND device_fingerprint = ?
-              AND verification_required = 1 AND verified = 0
+                            AND verification_required = 1 AND verified = 0
+                            AND COALESCE(authorization_status, 'PENDING') = 'PENDING'
             ORDER BY login_at DESC LIMIT 1
         """, (username, device_fingerprint), one=True)
         return request_device_verification(expired_login["id"] if expired_login else None)
@@ -231,65 +264,74 @@ def demo_login():
     })
 
 
-@security_bp.route('/api/verify-device', methods=['GET', 'POST'])
-def verify_device():
-    """
-    Verifies a device via token from email link.
-    GET  → browser-friendly (from email link click)
-    POST → JSON payload { "token": "..." }
-    """
-    if request.method == "GET":
-        token = request.args.get("token", "").strip()
-    else:
-        data = request.get_json() or {}
-        token = data.get("token", "").strip()
-
+def _resolve_device_authorization(token, decision):
     if not token:
-        return jsonify({"status": "error", "message": "Verification token is required."}), 400
+        return {"status": "error", "message": "Authorization token is required."}, 400
 
-    # Find pending login history record
     login_record = query_db("""
         SELECT * FROM login_history
-        WHERE verification_token = ? AND verified = 0
+        WHERE verification_token = ?
+          AND verified = 0
+          AND COALESCE(authorization_status, 'PENDING') = 'PENDING'
           AND verification_expires_at > CURRENT_TIMESTAMP
         ORDER BY login_at DESC LIMIT 1
-    """, (token,), one=True)
-
+    """, (_hash_authorization_token(token),), one=True)
     if not login_record:
-        return jsonify({"status": "error", "message": "Invalid or expired verification token."}), 400
+        return {"status": "error", "message": "Invalid, expired, or already used authorization link."}, 400
 
-    # Mark as verified
-    execute_db(
-        "UPDATE login_history SET verified = 1, verified_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (login_record["id"],)
-    )
+    if decision == "approve":
+        execute_db("""
+            UPDATE login_history
+            SET verified = 1, verification_required = 0,
+                authorization_status = 'APPROVED', authorization_used_at = CURRENT_TIMESTAMP,
+                verified_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND COALESCE(authorization_status, 'PENDING') = 'PENDING'
+        """, (login_record["id"],))
+        execute_db("""
+            UPDATE trusted_devices SET account_id = ?, is_trusted = 1, last_seen = CURRENT_TIMESTAMP
+            WHERE username = ? AND device_fingerprint = ?
+        """, (login_record["account_id"], login_record["username"], login_record["device_fingerprint"]))
+        return {
+            "status": "success",
+            "message": f"Login approved. The device is now trusted for @{login_record['username']}.",
+            "username": login_record["username"],
+            "decision": "approved",
+        }, 200
 
-    # Mark device as trusted
     execute_db("""
-        UPDATE trusted_devices SET account_id = ?, is_trusted = 1, last_seen = CURRENT_TIMESTAMP
-        WHERE username = ? AND device_fingerprint = ?
-    """, (login_record["account_id"], login_record["username"], login_record["device_fingerprint"]))
-
-    username = login_record["username"]
-
-    if request.method == "GET":
-        # Browser-friendly HTML response for email link click
-        return f"""<!DOCTYPE html>
-<html>
-<head><title>Device Verified</title>
-<style>body{{font-family:sans-serif;text-align:center;padding:60px;background:#0f172a;color:#e2e8f0}}
-h1{{color:#22d3ee}}p{{color:#94a3b8}}a{{color:#22d3ee}}</style></head>
-<body>
-<h1>✓ Device Verified Successfully</h1>
-<p>Your device has been successfully verified and trusted for account <strong>@{username}</strong>.</p>
-<p>You can now close this tab and log in normally.</p>
-</body></html>""", 200
-
-    return jsonify({
+        UPDATE login_history
+        SET verification_required = 0, authorization_status = 'DENIED',
+            authorization_used_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND COALESCE(authorization_status, 'PENDING') = 'PENDING'
+    """, (login_record["id"],))
+    return {
         "status": "success",
-        "message": f"Device verified successfully. This device is now trusted for @{username}.",
-        "username": username
-    })
+        "message": f"Login denied. The device remains untrusted for @{login_record['username']}.",
+        "username": login_record["username"],
+        "decision": "denied",
+    }, 200
+
+
+@security_bp.route('/api/device-authorization/approve', methods=['GET', 'POST'])
+def approve_device_authorization():
+    token = request.args.get("token", "").strip() if request.method == "GET" else (request.get_json() or {}).get("token", "").strip()
+    result, status_code = _resolve_device_authorization(token, "approve")
+    return jsonify(result), status_code
+
+
+@security_bp.route('/api/device-authorization/deny', methods=['GET', 'POST'])
+def deny_device_authorization():
+    token = request.args.get("token", "").strip() if request.method == "GET" else (request.get_json() or {}).get("token", "").strip()
+    result, status_code = _resolve_device_authorization(token, "deny")
+    return jsonify(result), status_code
+
+
+@security_bp.route('/api/verify-device', methods=['GET', 'POST'])
+def verify_device():
+    """Backward-compatible approve alias for existing verification links."""
+    token = request.args.get("token", "").strip() if request.method == "GET" else (request.get_json() or {}).get("token", "").strip()
+    result, status_code = _resolve_device_authorization(token, "approve")
+    return jsonify(result), status_code
 
 
 @security_bp.route('/api/device-status/<username>', methods=['GET'])

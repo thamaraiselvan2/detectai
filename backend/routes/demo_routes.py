@@ -6,8 +6,8 @@ from flask import Blueprint, request, jsonify, current_app, url_for
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
 from database import query_db, execute_db
-from risk_engine.scoring import analyze_profile_risk, detect_registered_impersonation
-from email_utils import send_impersonation_email
+import routes.monitor_routes as monitor_routes
+from risk_engine.detector import detect_profile
 from config import MONITORING_ALERT_THRESHOLD
 
 demo_bp = Blueprint('demo_bp', __name__)
@@ -50,7 +50,6 @@ def create_social_account():
 
     print({
         "username": username,
-        "email_exists": bool(request.form.get("email") or data.get("email") if request.is_json else request.form.get("email")),
         "bio_exists": bool(bio)
     }, flush=True)
     current_app.logger.info("Demo Social account creation request received for @%s", username or "<empty>")
@@ -130,86 +129,13 @@ def create_social_account():
         "created_at": created_at
     }
 
-    registered_profiles = query_db("""
-        SELECT r.id, r.username, r.email, r.original_profile_id, r.registered_at,
-               d.display_name, d.bio, d.avatar_url, d.followers_count,
-               d.following_count, d.posts_count, d.account_age_days,
-               d.created_at, d.is_verified
-        FROM registered_profiles r
-        JOIN demo_profiles d ON d.id = r.original_profile_id
-    """)
-    monitoring_detection = detect_registered_impersonation(new_profile, registered_profiles)
-    current_app.logger.info(
-        "Impersonation detection for @%s: detected=%s protected=%s risk_score=%s",
-        username,
-        monitoring_detection.get("detected", False),
-        monitoring_detection.get("protected_username", "<none>"),
-        monitoring_detection.get("risk_score", 0)
-    )
-    email_delivery = {"attempted": False, "sent": False, "status": "not_detected"}
-    if monitoring_detection.get("detected"):
-        matched_registered = next(
-            (profile for profile in registered_profiles
-             if profile.get("username", "").lower() == monitoring_detection["protected_username"].lower()),
-            None
-        )
-        registered_id = matched_registered.get("id") if matched_registered else None
-        if registered_id:
-            current_app.logger.info(
-                "Confirmed impersonation matched registered profile @%s; recipient=%s",
-                matched_registered.get("username"),
-                mask_email(matched_registered.get("email"))
-            )
-            existing_alert = query_db(
-                "SELECT id, email_status FROM impersonation_alerts WHERE registered_profile_id = ? AND demo_profile_id = ?",
-                (registered_id, profile_id),
-                one=True
-            )
-            if existing_alert:
-                email_delivery = {"attempted": False, "sent": existing_alert["email_status"] == "SENT", "status": "duplicate"}
-                current_app.logger.info("Duplicate impersonation alert skipped for alert %s", existing_alert["id"])
-            else:
-                alert_id, _ = execute_db("""
-                    INSERT INTO impersonation_alerts
-                        (registered_profile_id, demo_profile_id, risk_score, classification, reasons_json)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (registered_id, profile_id, monitoring_detection["risk_score"], monitoring_detection["classification"], json.dumps(monitoring_detection["reasons"])))
-                current_app.logger.info("Impersonation alert %s created for demo profile @%s", alert_id, username)
-                email_delivery = {"attempted": True, "sent": False, "status": "pending"}
-                print("=== IMPERSONATION EMAIL FUNCTION CALLED ===", flush=True)
-                delivery = send_impersonation_email(
-                    matched_registered.get("email"),
-                    monitoring_detection["protected_username"],
-                    monitoring_detection["new_username"],
-                    monitoring_detection["risk_score"],
-                    monitoring_detection["reasons"]
-                )
-                print(f"=== EMAIL RESULT: {delivery.get('status', 'unknown')} ===", flush=True)
-                email_delivery.update({"sent": delivery["sent"], "status": delivery["status"]})
-                execute_db(
-                    "UPDATE impersonation_alerts SET email_status = ?, emailed_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id = ?",
-                    ("SENT" if delivery["sent"] else "FAILED", 1 if delivery["sent"] else 0, alert_id)
-                )
-                if not delivery["sent"]:
-                    current_app.logger.error(
-                        "SMTP EMAIL FAILED alert_id=%s exception_type=%s exception_message=%s recipient=%s",
-                        alert_id,
-                        delivery.get("exception_type", "EmailDeliveryError"),
-                        delivery.get("message", delivery["status"]),
-                        mask_email(matched_registered.get("email"))
-                    )
-                else:
-                    current_app.logger.info("Impersonation email accepted by SMTP for alert %s", alert_id)
-        else:
-            current_app.logger.error("Detection matched @%s but no registered recipient record was found", monitoring_detection.get("protected_username", "<unknown>"))
-
     return jsonify({
         "status": "success",
         "message": "Account Created Successfully",
         "sub_message": "Your demo profile has been added to the social network.",
         "profile": new_profile,
-        "monitoring_detection": monitoring_detection,
-        "email_delivery": email_delivery
+        "monitoring_detection": {"status": "deferred_to_monitoring"},
+        "email_delivery": {"attempted": False, "sent": False, "status": "skipped"}
     }), 201
 
 @demo_bp.route('/api/demo-profiles', methods=['GET'])
@@ -275,20 +201,48 @@ def create_demo_profile():
         "is_verified": is_verified
     }
 
-    # Auto-Surveillance check against monitored protected users
+    # Auto-Surveillance check uses the same unified pipeline as later sweeps.
     monitored_users = query_db("SELECT * FROM protected_profiles WHERE is_monitoring_active = 1")
-    analysis = analyze_profile_risk(new_profile, monitored_users)
-    
+    all_demo_profiles = query_db("SELECT * FROM demo_profiles")
+    analysis = detect_profile(new_profile, monitored_users, demo_profiles=all_demo_profiles, use_llm=True)
+
     alert_created = False
     alert_id = None
-    if analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD and analysis["primary_match"]:
+    email_delivery = {"attempted": False, "sent": False, "status": "not_detected"}
+    if (
+        analysis.get("classification") in {"SUSPICIOUS", "FAKE"}
+        and analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD
+        and analysis["primary_match"]
+    ):
         prot_id = analysis["primary_match"]["protected_id"]
-        reason_summary = "; ".join([f["description"] for f in analysis["factors"][:3]])
-        alert_id, _ = execute_db("""
-            INSERT INTO alerts (protected_profile_id, demo_profile_id, risk_score, risk_level, reason_summary, status)
-            VALUES (?, ?, ?, ?, ?, 'UNREAD')
-        """, (prot_id, profile_id, analysis["risk_score"], analysis["risk_level"], reason_summary))
-        alert_created = True
+        reason_summary = "; ".join([f["description"] for f in analysis["factors"][:8]])
+        existing = query_db(
+            """SELECT id, risk_score, risk_level, reason_summary, email_status
+               FROM alerts WHERE protected_profile_id = ? AND demo_profile_id = ?""",
+            (prot_id, profile_id), one=True
+        )
+        event_signature = (analysis["risk_score"], analysis["risk_level"], reason_summary)
+        existing_signature = (existing["risk_score"], existing["risk_level"], existing["reason_summary"]) if existing else None
+        if existing and existing_signature == event_signature:
+            alert_id = existing["id"]
+            email_delivery = {"attempted": False, "sent": existing["email_status"] == "sent", "status": "duplicate"}
+        else:
+            alert_id, _ = execute_db("""
+                INSERT INTO alerts (protected_profile_id, demo_profile_id, alert_type, classification,
+                    risk_score, risk_level, reason_summary, evidence_json, status, email_status)
+                VALUES (?, ?, 'impersonation', ?, ?, ?, ?, ?, 'UNREAD', 'skipped')
+            """, (prot_id, profile_id, analysis["classification"], analysis["risk_score"],
+                  analysis["risk_level"], reason_summary, json.dumps(analysis.get("signals", {}), ensure_ascii=True)))
+            alert = query_db("""
+                SELECT a.*, p.email, p.username as protected_username, d.username as demo_username
+                FROM alerts a
+                JOIN protected_profiles p ON a.protected_profile_id = p.id
+                JOIN demo_profiles d ON a.demo_profile_id = d.id
+                WHERE a.id = ?
+            """, (alert_id,), one=True)
+            delivery = monitor_routes._dispatch_alert_email(alert)
+            email_delivery = {"attempted": True, "sent": delivery["sent"], "status": delivery["status"]}
+            alert_created = True
 
     return jsonify({
         "status": "success",
@@ -296,7 +250,8 @@ def create_demo_profile():
         "profile": new_profile,
         "immediate_analysis": analysis,
         "alert_triggered": alert_created,
-        "alert_id": alert_id
+        "alert_id": alert_id,
+        "email_delivery": email_delivery
     }), 201
 
 @demo_bp.route('/api/demo-profiles/<int:profile_id>', methods=['DELETE'])

@@ -38,6 +38,23 @@ def init_db():
         cursor.execute("ALTER TABLE login_history ADD COLUMN registered_email TEXT")
     if "verification_expires_at" not in login_history_cols:
         cursor.execute("ALTER TABLE login_history ADD COLUMN verification_expires_at DATETIME")
+    if "authorization_status" not in login_history_cols:
+        cursor.execute("ALTER TABLE login_history ADD COLUMN authorization_status TEXT DEFAULT 'PENDING'")
+    if "authorization_used_at" not in login_history_cols:
+        cursor.execute("ALTER TABLE login_history ADD COLUMN authorization_used_at DATETIME")
+
+    cursor.execute("PRAGMA table_info(alerts)")
+    alert_cols = [row["name"] for row in cursor.fetchall()]
+    alert_migrations = {
+        "alert_type": "TEXT NOT NULL DEFAULT 'impersonation'",
+        "classification": "TEXT NOT NULL DEFAULT 'FAKE'",
+        "evidence_json": "TEXT",
+        "email_status": "TEXT DEFAULT 'skipped'",
+        "email_sent_at": "DATETIME",
+    }
+    for column, definition in alert_migrations.items():
+        if column not in alert_cols:
+            cursor.execute(f"ALTER TABLE alerts ADD COLUMN {column} {definition}")
 
     # Migrate legacy protected registrations into the operational registry.
     cursor.execute("""

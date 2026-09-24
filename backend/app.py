@@ -47,8 +47,18 @@ def create_app():
     def not_found(e):
         return jsonify({"status": "error", "message": "Endpoint not found."}), 404
 
+    @app.errorhandler(Exception)
+    def unhandled_error(e):
+        app.logger.exception("Unhandled exception while processing request")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error.",
+            "error": type(e).__name__,
+        }), 500
+
     @app.errorhandler(500)
     def internal_error(e):
+        app.logger.exception("Unhandled internal server error")
         return jsonify({"status": "error", "message": "Internal server error."}), 500
 
     # Ensure DB is initialized and seeded
@@ -63,4 +73,4 @@ app = create_app()
 if __name__ == '__main__':
     print("[SERVER] Starting Fake Profile Detection Engine on http://localhost:5000")
     print(f"[EMAIL CONFIG] {get_email_configuration_status()}", flush=True)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)

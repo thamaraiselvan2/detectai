@@ -95,7 +95,9 @@ function App() {
       const result = await response.json()
 
       if (result.status === 'verification_required') {
-        setLoginMessage(result.message || 'Additional device verification is required.')
+        setLoginMessage(result.email_result?.status === 'sent'
+          ? 'Login verification required. A verification email has been sent to your registered email.'
+          : 'Login verification required. Email delivery is unavailable, so this device remains blocked.')
         return
       }
       if (!response.ok || result.status !== 'success') {

@@ -67,11 +67,16 @@ CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     protected_profile_id INTEGER NOT NULL,
     demo_profile_id INTEGER NOT NULL,
+    alert_type TEXT NOT NULL DEFAULT 'impersonation',
+    classification TEXT NOT NULL DEFAULT 'FAKE',
     risk_score INTEGER NOT NULL,
     risk_level TEXT NOT NULL,
     reason_summary TEXT NOT NULL,
+    evidence_json TEXT,
     status TEXT DEFAULT 'UNREAD',  -- UNREAD, ACKNOWLEDGED, RESOLVED
     email_dispatched INTEGER DEFAULT 0,
+    email_status TEXT DEFAULT 'skipped',
+    email_sent_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(protected_profile_id) REFERENCES protected_profiles(id) ON DELETE CASCADE,
     FOREIGN KEY(demo_profile_id) REFERENCES demo_profiles(id) ON DELETE CASCADE
@@ -111,6 +116,8 @@ CREATE TABLE IF NOT EXISTS login_history (
     verification_required INTEGER DEFAULT 0,
     verification_token TEXT,
     verification_expires_at DATETIME,
+    authorization_status TEXT DEFAULT 'PENDING',
+    authorization_used_at DATETIME,
     verified INTEGER DEFAULT 0,
     verified_at DATETIME
 );

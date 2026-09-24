@@ -77,12 +77,20 @@ export default function MonitoringPage({ onToast }) {
   const handleSendEmail = async (alertId) => {
     try {
       const res = await dispatchEmailAlert(alertId);
-      setEmailModalData(res.email_details);
-      setAlerts(alerts.map(a => a.id === alertId ? { ...a, email_dispatched: 1 } : a));
+      const emailStatus = res.alert?.email_status || res.email_details?.email_status || 'failed';
+      setEmailModalData({ ...res.email_details, email_status: emailStatus });
+      setAlerts(alerts.map(a => a.id === alertId ? {
+        ...a,
+        email_status: emailStatus,
+        email_dispatched: emailStatus === 'sent' ? 1 : 0
+      } : a));
+      const toastType = emailStatus === 'sent' ? 'success' : emailStatus === 'not_configured' ? 'warning' : 'error';
       onToast && onToast({
-        type: 'success',
-        title: 'Email Dispatched',
-        message: `Notification sent to registered email: ${res.email_details.recipient}`
+        type: toastType,
+        title: emailStatus === 'sent' ? 'Email Dispatched' : 'Security Alert Status',
+        message: emailStatus === 'sent'
+          ? 'Notification sent to the registered email.'
+          : `Email delivery status: ${emailStatus}.`
       });
     } catch (err) {
       console.error(err);
@@ -211,13 +219,13 @@ export default function MonitoringPage({ onToast }) {
                     <button
                       onClick={() => handleSendEmail(alert.id)}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono font-semibold transition ${
-                        alert.email_dispatched
+                        alert.email_status === 'sent' || alert.email_dispatched
                           ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
                           : 'bg-slate-900 hover:bg-slate-800 text-cyan-300 border-cyan-500/30'
                       }`}
                     >
                       <Mail className="w-3.5 h-3.5" />
-                      <span>{alert.email_dispatched ? 'Alert Dispatched' : 'Dispatch Email'}</span>
+                      <span>{alert.email_status === 'sent' || alert.email_dispatched ? 'Email Sent' : 'Dispatch Email'}</span>
                     </button>
 
                     {alert.status !== 'RESOLVED' ? (
@@ -288,6 +296,9 @@ export default function MonitoringPage({ onToast }) {
                     Detection Vector:
                   </span>
                   <p className="leading-relaxed">{alert.reason_summary}</p>
+                  <p className="mt-2 font-mono text-[11px] text-slate-400">
+                    Security alert: {alert.email_status || 'skipped'}
+                  </p>
                 </div>
               </div>
             );
@@ -302,7 +313,7 @@ export default function MonitoringPage({ onToast }) {
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2 text-cyan-400 font-mono text-sm font-bold">
                 <Mail className="w-4 h-4" />
-                <span>Security Dispatch Simulation</span>
+                <span>Security Alert Status</span>
               </div>
               <button
                 onClick={() => setEmailModalData(null)}
@@ -315,16 +326,17 @@ export default function MonitoringPage({ onToast }) {
             <div className="mt-4 space-y-3 font-mono text-xs">
               <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300">
                 <p className="text-slate-500">To:</p>
-                <p className="text-white font-bold">{emailModalData.recipient}</p>
+                <p className="text-white font-bold">{emailModalData.recipient || 'Registered email unavailable'}</p>
               </div>
               <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300">
                 <p className="text-slate-500">Subject:</p>
                 <p className="text-red-400 font-bold">{emailModalData.subject}</p>
               </div>
               <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 space-y-2 leading-relaxed">
-                <p>⚠️ <strong>SECURITY ALERT:</strong> An account attempting unauthorized identity mimicry has been detected targeting your profile.</p>
+                <p><strong>SECURITY ALERT:</strong> An account attempting unauthorized identity mimicry has been detected targeting your profile.</p>
                 <p><strong>Flagged Handle:</strong> {emailModalData.flagged_account}</p>
                 <p><strong>Calculated Threat Rating:</strong> {emailModalData.risk_level} ({emailModalData.risk_score}/100)</p>
+                <p><strong>Email Status:</strong> {emailModalData.email_status}</p>
                 <p><strong>Reasons:</strong> {emailModalData.reasons}</p>
                 <p className="text-slate-400 text-[11px] pt-2 border-t border-slate-800">
                   Automated alert triggered by Aegis.Guard Behavioral Anti-Impersonation Engine.

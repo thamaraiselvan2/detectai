@@ -74,22 +74,53 @@ def analyze_demo_profile_similarity(target_profile: dict, demo_profiles: list = 
                 strongest = {"candidate": candidate_result, "similarity": similarity}
 
     factors = []
+    contributions = []
     score_boost = 0
     if strongest:
         older = strongest["candidate"]
-        score_boost = 65
-        factors = [
-            "High similarity to an older profile",
-            "The searched profile was created later",
-            "Username and bio are highly similar"
+        username_points = round(older["username_similarity"] * 25)
+        display_name_points = round(older["display_name_similarity"] * 15)
+        bio_points = round(older["bio_similarity"] * 15)
+        avatar_points = 5 if older["avatar_similarity"] else 0
+        age_points = 5 if older["is_older"] else 0
+        verified_points = 5 if older["is_verified"] else 0
+        contributions = [
+            {
+                "label": f"Username similarity to @{older['username']}: {older['username_similarity']:.0%}",
+                "points": username_points,
+            },
+            {
+                "label": f"Display-name similarity to @{older['username']}: {older['display_name_similarity']:.0%}",
+                "points": display_name_points,
+            },
+            {
+                "label": f"Bio similarity to @{older['username']}: {older['bio_similarity']:.0%}",
+                "points": bio_points,
+            },
         ]
+        if avatar_points:
+            contributions.append({
+                "label": f"Avatar matches the older profile @{older['username']}",
+                "points": avatar_points,
+            })
+        if age_points:
+            contributions.append({
+                "label": "The searched profile was created later than the similar profile",
+                "points": age_points,
+            })
         if older.get("is_verified"):
-            score_boost += 10
-            factors.append("The older similar profile is verified")
+            contributions.append({
+                "label": f"The older similar profile @{older['username']} is verified",
+                "points": verified_points,
+            })
+        score_boost = sum(item["points"] for item in contributions)
+        factors = [item["label"] for item in contributions if item["points"] > 0]
 
     return {
         "score_boost": score_boost,
         "reasons": factors,
+        "contributions": contributions,
+        "strongest_match": strongest["candidate"] if strongest else None,
         "similar_profiles": sorted(candidates, key=lambda item: item["similarity_score"], reverse=True)[:5]
     }
 
@@ -284,5 +315,8 @@ def analyze_profile_risk(target_profile: dict, protected_profiles: list = None) 
         "similar_profiles": similar_candidates[:5],
         "factors": factors,
         "recommendation": recommendation,
-        "behavior_metrics": behavior_res["metrics"]
+        "behavior_metrics": {
+            **behavior_res["metrics"],
+            "score_boost": behavior_res["score_boost"],
+        }
     }

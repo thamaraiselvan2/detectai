@@ -114,8 +114,9 @@ class TestRiskEngine(unittest.TestCase):
             }
         ]
         result = analyze_demo_profile_similarity(profiles[1], profiles)
-        self.assertEqual(result["score_boost"], 65)
-        self.assertIn("High similarity to an older profile", result["reasons"])
+        self.assertEqual(result["score_boost"], 55)
+        self.assertGreaterEqual(len(result["contributions"]), 3)
+        self.assertIn("Username similarity", result["reasons"][0])
 
     def test_older_similar_demo_profile_is_not_flagged(self):
         profiles = [

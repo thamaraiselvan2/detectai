@@ -155,17 +155,16 @@ def detect_profile(
             print(f"[DETECTOR] LLM analysis failed (non-fatal): {e}")
 
     # ── Step 5: Shared demo-identity similarity signal ────────────────────────
-    # This is intentionally the existing score boost, now owned by the shared
-    # detector so Scanner and Monitoring cannot diverge.
+    # Weight each identity component from the actual strongest older match.
     demo_similarity = analyze_demo_profile_similarity(target_profile, demo_profiles)
     if demo_similarity["score_boost"]:
         risk_score = min(100, risk_score + demo_similarity["score_boost"])
         factors.extend({
             "category": "Demo Profile Impersonation",
-            "points": demo_similarity["score_boost"],
+            "points": contribution["points"],
             "severity": "critical",
-            "description": reason,
-        } for reason in demo_similarity["reasons"])
+            "description": contribution["label"],
+        } for contribution in demo_similarity["contributions"] if contribution["points"] > 0)
 
     # ── Step 6: Recalculate risk level after all boosts ───────────────────────
     if risk_score >= 80:
@@ -181,26 +180,34 @@ def detect_profile(
 
     # ── Step 7: Plain-Language Explanation ────────────────────────────────────
     demo_candidates = demo_similarity.get("similar_profiles", [])
-    strongest_demo = demo_candidates[0] if demo_candidates else {}
+    strongest_demo = demo_similarity.get("strongest_match") or (demo_candidates[0] if demo_candidates else {})
     explanation = _build_explanation(
         risk_level, risk_score, factors, ml_result, llm_result,
         device_signal, ip_signal, analysis.get("primary_match")
     )
 
     classification = "FAKE" if risk_score >= 70 else "SUSPICIOUS" if risk_score >= 40 else "REAL"
-    llm_explanation = llm_explain({
-        "classification": classification,
-        "risk_score": risk_score,
-        "ml_probability": ml_result.get("ml_probability") if ml_result else None,
-        "username_similarity": strongest_demo.get("username_similarity", 0.0),
-        "profile_similarity": strongest_demo.get("similarity_score", 0.0),
-        "avatar_similarity": bool(strongest_demo.get("avatar_similarity", False)),
-        "account_age_days": target_profile.get("account_age_days"),
-        "behavioral_signals": analysis.get("behavior_metrics", {}),
-        "ip_signal": ip_signal,
-        "device_signal": device_signal,
-        "reasons": [factor.get("description", "") for factor in factors[:6]],
-    })
+    try:
+        llm_explanation = llm_explain({
+            "classification": classification,
+            "risk_score": risk_score,
+            "ml_probability": ml_result.get("ml_probability") if ml_result else None,
+            "username_similarity": strongest_demo.get("username_similarity", 0.0),
+            "profile_similarity": strongest_demo.get("similarity_score", 0.0),
+            "avatar_similarity": bool(strongest_demo.get("avatar_similarity", False)),
+            "account_age_days": target_profile.get("account_age_days"),
+            "behavioral_signals": analysis.get("behavior_metrics", {}),
+            "ip_signal": ip_signal,
+            "device_signal": device_signal,
+            "reasons": [factor.get("description", "") for factor in factors[:6]],
+        })
+    except Exception as e:
+        print(f"[DETECTOR] LLM explanation failed (non-fatal): {e}")
+        llm_explanation = {
+            "llm_status": "unavailable",
+            "llm_used": None,
+            "explanation": None,
+        }
     explanation["llm_explanation"] = llm_explanation.get("explanation")
 
     # Return enriched result — backward-compatible (same top-level keys as before)
@@ -209,6 +216,7 @@ def detect_profile(
     return {
         # ── Existing keys (unchanged format) ──────────────────────────────────
         "risk_score": risk_score,
+        "classification": classification,
         "risk_level": risk_level,
         "primary_match": analysis.get("primary_match"),
         "similar_profiles": returned_similar_profiles,
@@ -231,6 +239,17 @@ def detect_profile(
             "avatar_similarity": bool(strongest_demo.get("avatar_similarity", False)),
             "similarity_score": strongest_demo.get("similarity_score", 0.0),
             "score_boost": demo_similarity.get("score_boost", 0),
+        },
+        "signals": {
+            "ml_probability": ml_result.get("ml_probability") if ml_result else None,
+            "username_similarity": strongest_demo.get("username_similarity", 0.0),
+            "display_name_similarity": strongest_demo.get("display_name_similarity", 0.0),
+            "bio_similarity": strongest_demo.get("bio_similarity", 0.0),
+            "avatar_similarity": bool(strongest_demo.get("avatar_similarity", False)),
+            "account_age_days": analysis.get("behavior_metrics", {}).get("account_age_days"),
+            "behavior_score": analysis.get("behavior_metrics", {}).get("score_boost", 0),
+            "identity_score": demo_similarity.get("score_boost", 0),
+            "llm_semantic_risk": llm_result.get("semantic_risk") if llm_result else None,
         },
         "profile_signals": analysis.get("behavior_metrics", {}),
         "demo_similarity": demo_similarity,

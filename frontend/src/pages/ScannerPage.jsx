@@ -323,6 +323,23 @@ export default function ScannerPage({ onToast, initialTarget }) {
                   level={scanResult.analysis.risk_level} 
                 />
 
+                <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <p className="text-[10px] uppercase text-slate-500">Classification</p>
+                    <p className="mt-1 font-bold text-cyan-300">
+                      {scanResult.classification || scanResult.analysis.classification}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <p className="text-[10px] uppercase text-slate-500">ML probability</p>
+                    <p className="mt-1 font-bold text-white">
+                      {scanResult.analysis.signals?.ml_probability == null
+                        ? 'Unavailable'
+                        : `${(scanResult.analysis.signals.ml_probability * 100).toFixed(1)}%`}
+                    </p>
+                  </div>
+                </div>
+
                 {/* Recommendation Banner */}
                 <div className="mt-4 p-4 rounded-2xl bg-slate-950/80 border border-slate-800">
                   <div className="flex items-start gap-2.5">
@@ -416,6 +433,22 @@ export default function ScannerPage({ onToast, initialTarget }) {
                 </div>
 
                 <ReasonList factors={scanResult.analysis.factors} />
+
+                <div className="border-t border-slate-800 pt-4">
+                  <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-400">
+                    Signal Evidence
+                  </h4>
+                  <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] font-mono text-slate-300 sm:grid-cols-3">
+                    <span>Username: {((scanResult.analysis.signals?.username_similarity || 0) * 100).toFixed(1)}%</span>
+                    <span>Display name: {((scanResult.analysis.signals?.display_name_similarity || 0) * 100).toFixed(1)}%</span>
+                    <span>Bio: {((scanResult.analysis.signals?.bio_similarity || 0) * 100).toFixed(1)}%</span>
+                    <span>Avatar: {scanResult.analysis.signals?.avatar_similarity ? 'Match' : 'No match'}</span>
+                    <span>Account age: {scanResult.analysis.signals?.account_age_days ?? 'Unavailable'} days</span>
+                    <span>LLM semantic risk: {scanResult.analysis.signals?.llm_semantic_risk == null
+                      ? 'Unavailable'
+                      : `${(scanResult.analysis.signals.llm_semantic_risk * 100).toFixed(1)}%`}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

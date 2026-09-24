@@ -86,7 +86,7 @@ def check_profile():
         "status": "success",
         "found_in_demo": bool(demo_record),
         "username": target_profile["username"],
-        "classification": "FAKE" if analysis["risk_score"] >= 70 else "SUSPICIOUS" if analysis["risk_score"] >= 40 else "REAL",
+        "classification": analysis["classification"],
         "risk_score": analysis["risk_score"],
         "risk_level": analysis["risk_level"],
         "reasons": [factor["description"] for factor in analysis["factors"]],

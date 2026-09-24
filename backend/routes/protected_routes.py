@@ -4,6 +4,51 @@ from database import query_db, execute_db
 
 protected_bp = Blueprint('protected_bp', __name__)
 
+
+def register_profile_for_protection(username, email, original_profile=None):
+    """Create the existing protected and legacy registration records together."""
+    if not original_profile:
+        original_profile = query_db(
+            "SELECT * FROM demo_profiles WHERE LOWER(username) = LOWER(?)",
+            (username,), one=True
+        )
+    if not original_profile:
+        return None, f"Profile '@{username}' was not found in the demo profiles."
+
+    existing_protected = query_db(
+        """SELECT id, username, email FROM protected_profiles
+           WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)""",
+        (username, email), one=True
+    )
+    existing_legacy = query_db(
+        """SELECT id, username, email FROM registered_profiles
+           WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)""",
+        (username, email), one=True
+    )
+    if existing_protected or existing_legacy:
+        existing = existing_protected or existing_legacy
+        if existing["username"].lower() == username.lower():
+            message = f"Username '@{username}' is already registered for protection."
+        else:
+            message = "That email address is already used for a registered profile."
+        return None, message
+
+    display_name = original_profile.get("display_name") or username
+    bio = original_profile.get("bio", "")
+    avatar_url = original_profile.get("avatar_url", "")
+    follower_count = int(original_profile.get("followers_count") or 0)
+    protected_id, _ = execute_db("""
+        INSERT INTO protected_profiles
+            (username, display_name, email, bio, avatar_url, follower_count, is_monitoring_active)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+    """, (username, display_name, email, bio, avatar_url, follower_count))
+    registered_id, _ = execute_db("""
+        INSERT INTO registered_profiles (username, email, original_profile_id)
+        VALUES (?, ?, ?)
+    """, (username, email, original_profile["id"]))
+    return {"protected_id": protected_id, "registered_id": registered_id, "email": email}, None
+
+
 @protected_bp.route('/register-user', methods=['POST'])
 @protected_bp.route('/api/register-user', methods=['POST'])
 def register_user():
@@ -24,8 +69,7 @@ def register_user():
 
     original_profile = query_db(
         "SELECT * FROM demo_profiles WHERE LOWER(username) = LOWER(?)",
-        (username,),
-        one=True
+        (username,), one=True
     )
     if not original_profile:
         return jsonify({
@@ -33,55 +77,21 @@ def register_user():
             "message": f"Profile '@{username}' was not found in the demo profiles."
         }), 404
     original_profile = dict(original_profile)
+    registration, registration_error = register_profile_for_protection(username, email, original_profile)
+    if registration_error:
+        return jsonify({"status": "error", "message": registration_error}), 409
 
-    existing_protected = query_db(
-        """SELECT id, username, email FROM protected_profiles
-           WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)""",
-        (username, email),
-        one=True
-    )
-    existing_legacy = query_db(
-        """SELECT id, username, email FROM registered_profiles
-           WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)""",
-        (username, email),
-        one=True
-    )
-    if existing_protected or existing_legacy:
-        existing = existing_protected or existing_legacy
-        if existing["username"].lower() == username.lower():
-            message = f"Username '@{username}' is already registered for protection."
-        else:
-            message = "That email address is already used for a registered profile."
-        return jsonify({"status": "error", "message": message}), 409
-
-    display_name = data.get("display_name", "").strip() or original_profile["display_name"]
-    bio = data.get("bio", "").strip() or original_profile.get("bio", "")
-    avatar_url = data.get("avatar_url", "").strip() or original_profile.get("avatar_url", "")
-    follower_count = int(data.get("follower_count") or original_profile.get("followers_count") or 0)
-
-    protected_id, _ = execute_db("""
-        INSERT INTO protected_profiles
-            (username, display_name, email, bio, avatar_url, follower_count, is_monitoring_active)
-        VALUES (?, ?, ?, ?, ?, ?, 1)
-    """, (username, display_name, email, bio, avatar_url, follower_count))
-
-    # Keep the legacy association for the existing Demo Social alert workflow.
-    registered_id, _ = execute_db("""
-        INSERT INTO registered_profiles (username, email, original_profile_id)
-        VALUES (?, ?, ?)
-    """, (username, email, original_profile["id"]))
+    protected_id = registration["protected_id"]
+    registered_id = registration["registered_id"]
     registered_record = query_db(
         "SELECT id, username, email, original_profile_id, registered_at FROM registered_profiles WHERE id = ?",
-        (registered_id,),
-        one=True
+        (registered_id,), one=True
     )
-    registered_record = dict(registered_record)
-
     return jsonify({
         "status": "success",
         "message": f"Profile '@{username}' successfully registered for protection.",
         "registered_profile": {
-            **registered_record,
+            **dict(registered_record),
             "original_profile": original_profile
         },
         "protected_profile_id": protected_id,

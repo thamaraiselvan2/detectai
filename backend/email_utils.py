@@ -3,6 +3,9 @@ import smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
+# Load the same project/backend .env locations even when this service is imported directly.
+from config import BASE_DIR, PROJECT_DIR  # noqa: F401
+
 
 def get_email_configuration_status():
     """Returns safe configuration diagnostics without exposing credentials."""
@@ -60,6 +63,57 @@ def _send_smtp_message(message, settings):
                 pass
         print(f"[EMAIL] SMTP delivery failed: {type(error).__name__}: {error}", flush=True)
         return {"sent": False, "status": "failed", "exception_type": type(error).__name__}
+
+
+def test_smtp_delivery(recipient=None):
+    """Run a safe development-only SMTP connectivity/authentication/send check."""
+    settings = _smtp_settings()
+    result = {
+        "configured": False,
+        "smtp_connected": False,
+        "authenticated": False,
+        "email_sent": False,
+        "status": "not_configured",
+    }
+    if not settings["host"] or not settings["username"] or not settings["password"] or not settings["sender"]:
+        return result
+
+    smtp = None
+    try:
+        result["configured"] = True
+        smtp = smtplib.SMTP(settings["host"], settings["port"], timeout=20)
+        smtp.ehlo()
+        result["smtp_connected"] = True
+        if settings["use_tls"]:
+            smtp.starttls()
+            smtp.ehlo()
+        smtp.login(settings["username"], settings["password"])
+        result["authenticated"] = True
+        target = recipient or settings["sender"]
+        message = EmailMessage()
+        message["Subject"] = "DetectAI SMTP Test"
+        message["From"] = settings["sender"]
+        message["To"] = target
+        message.set_content("DetectAI SMTP configuration test succeeded.")
+        refused = smtp.send_message(message)
+        if refused:
+            result["status"] = "failed"
+            result["safe_error"] = "SMTPRecipientsRefused"
+        else:
+            result["email_sent"] = True
+            result["status"] = "sent"
+        smtp.quit()
+        return result
+    except Exception as error:
+        if smtp is not None:
+            try:
+                smtp.quit()
+            except Exception:
+                pass
+        result["status"] = "failed"
+        result["safe_error"] = f"{type(error).__name__}: {error}"
+        print(f"[EMAIL] SMTP diagnostic failed: {result['safe_error']}", flush=True)
+        return result
 
 
 def _safe_signal_lines(signals):

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS demo_profiles (
 CREATE TABLE IF NOT EXISTS registered_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL,
     original_profile_id INTEGER NOT NULL,
     registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(original_profile_id) REFERENCES demo_profiles(id) ON DELETE CASCADE

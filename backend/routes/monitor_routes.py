@@ -54,6 +54,74 @@ def _alert_with_email_status(alert, email_status):
         "email_status": email_status,
     }
 
+
+def _monitoring_fallback():
+    return {
+        "classification": "UNKNOWN",
+        "risk_score": 0,
+        "risk_level": "LOW",
+        "primary_match": None,
+        "factors": [],
+        "signals": {},
+    }, False, None, {"attempted": False, "sent": False, "status": "failed"}
+
+
+def process_new_demo_profile(new_profile):
+    """Run automatic detection without failing the account-creation request."""
+    try:
+        return _process_new_demo_profile(new_profile)
+    except Exception as error:
+        print(f"[MONITOR] Automatic new-profile processing failed (non-fatal): {type(error).__name__}: {error}", flush=True)
+        return _monitoring_fallback()
+
+
+def _process_new_demo_profile(new_profile):
+    """Run automatic detection and alert delivery for one newly created profile."""
+    monitored_users = query_db("SELECT * FROM protected_profiles WHERE is_monitoring_active = 1")
+    all_demo_profiles = query_db("SELECT * FROM demo_profiles")
+    analysis = detect_profile(new_profile, monitored_users, demo_profiles=all_demo_profiles, use_llm=True)
+
+    alert_created = False
+    alert_id = None
+    email_delivery = {"attempted": False, "sent": False, "status": "not_detected"}
+    if (
+        analysis.get("classification") in {"SUSPICIOUS", "FAKE"}
+        and analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD
+        and analysis["primary_match"]
+    ):
+        prot_id = analysis["primary_match"]["protected_id"]
+        reason_summary = "; ".join([f["description"] for f in analysis["factors"][:8]])
+        existing = query_db(
+            """SELECT id, risk_score, risk_level, reason_summary, email_status
+               FROM alerts WHERE protected_profile_id = ? AND demo_profile_id = ?""",
+            (prot_id, new_profile["id"]), one=True
+        )
+        event_signature = (analysis["risk_score"], analysis["risk_level"], reason_summary)
+        existing_signature = (existing["risk_score"], existing["risk_level"], existing["reason_summary"]) if existing else None
+        if existing and existing_signature == event_signature:
+            alert_id = existing["id"]
+            email_delivery = {"attempted": False, "sent": existing["email_status"] == "sent", "status": "duplicate"}
+        else:
+            alert_id, _ = execute_db("""
+                INSERT INTO alerts (protected_profile_id, demo_profile_id, alert_type, classification,
+                    risk_score, risk_level, reason_summary, evidence_json, status, email_status)
+                VALUES (?, ?, 'impersonation', ?, ?, ?, ?, ?, 'UNREAD', 'skipped')
+            """, (prot_id, new_profile["id"], analysis["classification"], analysis["risk_score"],
+                  analysis["risk_level"], reason_summary, json.dumps(analysis.get("signals", {}), ensure_ascii=True)))
+
+            alert = query_db("""
+                SELECT a.*, p.email, p.username as protected_username, d.username as demo_username
+                FROM alerts a
+                JOIN protected_profiles p ON a.protected_profile_id = p.id
+                JOIN demo_profiles d ON a.demo_profile_id = d.id
+                WHERE a.id = ?
+            """, (alert_id,), one=True)
+            delivery = _dispatch_alert_email(alert)
+            email_delivery = {"attempted": True, "sent": delivery["sent"], "status": delivery["status"]}
+            alert_created = True
+
+    return analysis, alert_created, alert_id, email_delivery
+
 @monitor_bp.route('/monitor-username', methods=['POST'])
 @monitor_bp.route('/api/monitor-username', methods=['POST'])
 def monitor_username():

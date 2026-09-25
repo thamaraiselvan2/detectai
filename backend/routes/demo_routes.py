@@ -1,14 +1,11 @@
 import os
 import uuid
 import base64
-import json
 from flask import Blueprint, request, jsonify, current_app, url_for
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
 from database import query_db, execute_db
 import routes.monitor_routes as monitor_routes
-from risk_engine.detector import detect_profile
-from config import MONITORING_ALERT_THRESHOLD
 
 demo_bp = Blueprint('demo_bp', __name__)
 
@@ -129,13 +126,18 @@ def create_social_account():
         "created_at": created_at
     }
 
+    analysis, alert_created, alert_id, email_delivery = monitor_routes.process_new_demo_profile(new_profile)
+
     return jsonify({
         "status": "success",
         "message": "Account Created Successfully",
         "sub_message": "Your demo profile has been added to the social network.",
         "profile": new_profile,
-        "monitoring_detection": {"status": "deferred_to_monitoring"},
-        "email_delivery": {"attempted": False, "sent": False, "status": "skipped"}
+        "monitoring_detection": {"status": "completed"},
+        "immediate_analysis": analysis,
+        "alert_triggered": alert_created,
+        "alert_id": alert_id,
+        "email_delivery": email_delivery
     }), 201
 
 @demo_bp.route('/api/demo-profiles', methods=['GET'])
@@ -202,47 +204,7 @@ def create_demo_profile():
     }
 
     # Auto-Surveillance check uses the same unified pipeline as later sweeps.
-    monitored_users = query_db("SELECT * FROM protected_profiles WHERE is_monitoring_active = 1")
-    all_demo_profiles = query_db("SELECT * FROM demo_profiles")
-    analysis = detect_profile(new_profile, monitored_users, demo_profiles=all_demo_profiles, use_llm=True)
-
-    alert_created = False
-    alert_id = None
-    email_delivery = {"attempted": False, "sent": False, "status": "not_detected"}
-    if (
-        analysis.get("classification") in {"SUSPICIOUS", "FAKE"}
-        and analysis["risk_score"] >= MONITORING_ALERT_THRESHOLD
-        and analysis["primary_match"]
-    ):
-        prot_id = analysis["primary_match"]["protected_id"]
-        reason_summary = "; ".join([f["description"] for f in analysis["factors"][:8]])
-        existing = query_db(
-            """SELECT id, risk_score, risk_level, reason_summary, email_status
-               FROM alerts WHERE protected_profile_id = ? AND demo_profile_id = ?""",
-            (prot_id, profile_id), one=True
-        )
-        event_signature = (analysis["risk_score"], analysis["risk_level"], reason_summary)
-        existing_signature = (existing["risk_score"], existing["risk_level"], existing["reason_summary"]) if existing else None
-        if existing and existing_signature == event_signature:
-            alert_id = existing["id"]
-            email_delivery = {"attempted": False, "sent": existing["email_status"] == "sent", "status": "duplicate"}
-        else:
-            alert_id, _ = execute_db("""
-                INSERT INTO alerts (protected_profile_id, demo_profile_id, alert_type, classification,
-                    risk_score, risk_level, reason_summary, evidence_json, status, email_status)
-                VALUES (?, ?, 'impersonation', ?, ?, ?, ?, ?, 'UNREAD', 'skipped')
-            """, (prot_id, profile_id, analysis["classification"], analysis["risk_score"],
-                  analysis["risk_level"], reason_summary, json.dumps(analysis.get("signals", {}), ensure_ascii=True)))
-            alert = query_db("""
-                SELECT a.*, p.email, p.username as protected_username, d.username as demo_username
-                FROM alerts a
-                JOIN protected_profiles p ON a.protected_profile_id = p.id
-                JOIN demo_profiles d ON a.demo_profile_id = d.id
-                WHERE a.id = ?
-            """, (alert_id,), one=True)
-            delivery = monitor_routes._dispatch_alert_email(alert)
-            email_delivery = {"attempted": True, "sent": delivery["sent"], "status": delivery["status"]}
-            alert_created = True
+    analysis, alert_created, alert_id, email_delivery = monitor_routes.process_new_demo_profile(new_profile)
 
     return jsonify({
         "status": "success",

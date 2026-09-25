@@ -56,6 +56,41 @@ def init_db():
         if column not in alert_cols:
             cursor.execute(f"ALTER TABLE alerts ADD COLUMN {column} {definition}")
 
+    # Remove the legacy email uniqueness constraint while retaining username uniqueness.
+    cursor.execute("PRAGMA index_list(registered_profiles)")
+    has_unique_email_index = False
+    for index_row in cursor.fetchall():
+        if not index_row[2]:
+            continue
+        cursor.execute(f'PRAGMA index_info("{index_row[1]}")')
+        index_columns = [column_row[2] for column_row in cursor.fetchall()]
+        if index_columns == ["email"]:
+            has_unique_email_index = True
+            break
+
+    if has_unique_email_index:
+        conn.commit()
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        cursor.execute("""
+            CREATE TABLE registered_profiles_without_email_unique (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT NOT NULL,
+                original_profile_id INTEGER NOT NULL,
+                registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(original_profile_id) REFERENCES demo_profiles(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO registered_profiles_without_email_unique
+                (id, username, email, original_profile_id, registered_at)
+            SELECT id, username, email, original_profile_id, registered_at
+            FROM registered_profiles
+        """)
+        cursor.execute("DROP TABLE registered_profiles")
+        cursor.execute("ALTER TABLE registered_profiles_without_email_unique RENAME TO registered_profiles")
+        cursor.execute("PRAGMA foreign_keys = ON")
+
     # Migrate legacy protected registrations into the operational registry.
     cursor.execute("""
         INSERT OR IGNORE INTO protected_profiles

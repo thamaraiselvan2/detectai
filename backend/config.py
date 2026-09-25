@@ -1,7 +1,14 @@
 import os
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(BASE_DIR)
 DATABASE_PATH = os.path.join(BASE_DIR, "fakedetector.db")
+
+# Support starting Flask from either the repository root or backend directory.
+for _env_path in (os.path.join(PROJECT_DIR, ".env"), os.path.join(BASE_DIR, ".env")):
+    if os.path.isfile(_env_path):
+        load_dotenv(_env_path, override=False)
 
 # Risk Level Classification Thresholds
 RISK_LEVELS = {

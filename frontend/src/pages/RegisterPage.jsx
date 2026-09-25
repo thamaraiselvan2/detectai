@@ -68,8 +68,10 @@ export default function RegisterPage({ onBackToHome }) {
     } catch (err) {
       console.error('Registration error:', err);
       if (err.response?.status === 409) {
+        const conflictMessage = err.response?.data?.message || '';
+        const isEmailConflict = /email address is already used/i.test(conflictMessage);
         setErrors({
-          form: `Username '@${cleanUsername}' is already registered as a protected identity.`
+          form: isEmailConflict ? 'Email is already registered.' : 'Username is already registered.'
         });
       } else {
         setErrors({

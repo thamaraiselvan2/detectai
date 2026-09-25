@@ -17,20 +17,20 @@ def register_profile_for_protection(username, email, original_profile=None):
 
     existing_protected = query_db(
         """SELECT id, username, email FROM protected_profiles
-           WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)""",
-        (username, email), one=True
+           WHERE LOWER(username) = LOWER(?)""",
+        (username,), one=True
     )
     existing_legacy = query_db(
         """SELECT id, username, email FROM registered_profiles
-           WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)""",
-        (username, email), one=True
+           WHERE LOWER(username) = LOWER(?)""",
+        (username,), one=True
     )
     if existing_protected or existing_legacy:
         existing = existing_protected or existing_legacy
         if existing["username"].lower() == username.lower():
             message = f"Username '@{username}' is already registered for protection."
         else:
-            message = "That email address is already used for a registered profile."
+            message = "Username is already registered."
         return None, message
 
     display_name = original_profile.get("display_name") or username
